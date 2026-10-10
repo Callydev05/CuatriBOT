@@ -1,0 +1,16 @@
+# Servicio systemd para dejar el bot funcionando 24/7 en Linux (VPS, Raspberry Pi...).
+# Cambia TU_USUARIO por tu usuario de Linux y cópialo a /etc/systemd/system/
+[Unit]
+Description=Bot de Telegram del cuatrimestre (Notion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=TU_USUARIO
+WorkingDirectory=/home/TU_USUARIO/cuatribot
+ExecStart=/home/TU_USUARIO/cuatribot/.venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

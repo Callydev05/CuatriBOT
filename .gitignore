@@ -1,0 +1,8 @@
+# Secretos: nunca a GitHub
+.env
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
