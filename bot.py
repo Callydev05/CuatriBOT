@@ -18,7 +18,7 @@ from __future__ import annotations
 import html
 import logging
 import os
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -40,6 +40,7 @@ CHAT_ID = int(os.environ.get("CHAT_ID") or 0)
 EXAMENES_DB_ID = os.environ.get("EXAMENES_DB_ID", "")
 ASIGNATURAS_DB_ID = os.environ.get("ASIGNATURAS_DB_ID", "")
 NOTAS_RAPIDAS_PAGE_ID = os.environ.get("NOTAS_RAPIDAS_PAGE_ID", "")
+HORARIO_DB_ID = os.environ.get("HORARIO_DB_ID", "")
 if not (EXAMENES_DB_ID and ASIGNATURAS_DB_ID):
     raise SystemExit("Faltan EXAMENES_DB_ID y ASIGNATURAS_DB_ID en .env. Ejecuta antes: python setup_notion.py")
 HORA_RESUMEN = os.environ.get("HORA_RESUMEN", "09:00")
@@ -65,7 +66,8 @@ AYUDA = (
     "Lo que pongas en otra línea se guarda como notas.\n\n"
     f"Te aviso cada día a las {HORA_RESUMEN} desde {DIAS_AVISO} días antes de cada fecha, "
     "y te mando un resumen de todo lo pendiente.\n\n"
-    "/pendientes · /avisos · /hecho · /ayuda"
+    "<b>Horario</b>: /horario (hoy), /horario mañana o /horario viernes\n\n"
+    "/pendientes · /horario · /avisos · /hecho · /ayuda"
 )
 
 
@@ -263,6 +265,70 @@ async def cmd_hecho(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("¿Qué has terminado?", reply_markup=InlineKeyboardMarkup(botones))
 
 
+DIAS_NOTION = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+EMOJI_CLASE = {"Teoría": "📖", "Prácticas": "💻"}
+
+
+def dia_pedido(args: list[str], ref: date) -> date | None:
+    """Fecha a partir de lo escrito tras /horario: nada (hoy), mañana, pasado mañana o un día de la semana."""
+    texto = " ".join(args).strip().lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ñ", "n")):
+        texto = texto.replace(a, b)
+    if texto in ("", "hoy"):
+        return ref
+    if texto == "manana":
+        return ref + timedelta(days=1)
+    if texto == "pasado manana":
+        return ref + timedelta(days=2)
+    sin_tildes = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+    if texto in sin_tildes:
+        dias = (sin_tildes.index(texto) - ref.weekday()) % 7
+        return ref + timedelta(days=dias)
+    return None
+
+
+def texto_horario(clases: list[dict], dia: date, ref: date) -> str:
+    if dia == ref:
+        cuando, de_cuando = "hoy", "de hoy"
+    elif dia == ref + timedelta(days=1):
+        cuando, de_cuando = "mañana", "de mañana"
+    else:
+        cuando, de_cuando = "el " + DIAS[dia.weekday()], "del " + DIAS[dia.weekday()]
+    titulo = f"🗓 <b>Clases {de_cuando}</b> · {DIAS[dia.weekday()]} {dia.day} de {MESES[dia.month - 1]}"
+    if not clases:
+        return f"{titulo}\n\n😎 No tienes clases {cuando}."
+    lineas = [titulo, ""]
+    for c in clases:
+        horas = f"{c['inicio']}–{c['fin']}" if c["fin"] else c["inicio"]
+        emoji = EMOJI_CLASE.get(c["tipo"], "•")
+        linea = f"{emoji} <b>{html.escape(horas)}</b>  {html.escape(c['clase'])}"
+        if c["notas"]:
+            linea += f"\n      <i>{html.escape(c['notas'])}</i>"
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
+async def cmd_horario(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update):
+        return
+    if not HORARIO_DB_ID:
+        await update.message.reply_text("No tengo configurado el horario. Añade HORARIO_DB_ID en el .env "
+                                        "(o en las variables de entorno del hosting) y reinicia el bot.")
+        return
+    ref = hoy()
+    dia = dia_pedido(ctx.args, ref)
+    if dia is None:
+        await update.message.reply_text("No te he entendido. Usa /horario, /horario mañana o /horario viernes.")
+        return
+    try:
+        clases = await notion(ctx).clases_del_dia(DIAS_NOTION[dia.weekday()])
+    except NotionError as e:
+        log.error("Error leyendo el horario: %s", e)
+        await update.message.reply_text("⚠️ No he podido leer el horario de Notion.")
+        return
+    await update.message.reply_text(texto_horario(clases, dia, ref), parse_mode=ParseMode.HTML)
+
+
 async def on_mensaje(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
         return
@@ -339,7 +405,8 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init(app: Application):
-    app.bot_data["notion"] = Notion(NOTION_TOKEN, EXAMENES_DB_ID, ASIGNATURAS_DB_ID, NOTAS_RAPIDAS_PAGE_ID)
+    app.bot_data["notion"] = Notion(NOTION_TOKEN, EXAMENES_DB_ID, ASIGNATURAS_DB_ID, NOTAS_RAPIDAS_PAGE_ID,
+                                    HORARIO_DB_ID)
     if CHAT_ID:
         h, m = (int(x) for x in HORA_RESUMEN.split(":"))
         app.job_queue.run_daily(tarea_diaria, time=time(h, m, tzinfo=TZ), name="diario")
@@ -392,6 +459,7 @@ def main():
     app.add_handler(CommandHandler("pendientes", cmd_pendientes))
     app.add_handler(CommandHandler("avisos", cmd_avisos))
     app.add_handler(CommandHandler("hecho", cmd_hecho))
+    app.add_handler(CommandHandler("horario", cmd_horario))
     app.add_handler(CallbackQueryHandler(on_boton))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_mensaje))
     app.add_error_handler(on_error)

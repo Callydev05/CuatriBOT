@@ -13,6 +13,7 @@ Uso:
 Crea dentro de la página:
   - Base de datos "Asignaturas" (una página por asignatura con su lista de tareas)
   - Base de datos "Exámenes y entregas" (donde guarda el bot)
+  - Base de datos "Horario" (tus clases semanales, para el comando /horario)
   - Página "Notas rápidas"
 """
 from __future__ import annotations
@@ -113,6 +114,25 @@ def main():
     })
     print("✅ Base de datos Exámenes y entregas creada")
 
+    horario_db = req("POST", "/databases", json={
+        "parent": {"type": "page_id", "page_id": padre},
+        "title": [{"text": {"content": "Horario"}}],
+        "properties": {
+            "Clase": {"title": {}},
+            "Día": {"select": {"options": [
+                {"name": d, "color": c} for d, c in (
+                    ("Lunes", "blue"), ("Martes", "green"), ("Miércoles", "yellow"),
+                    ("Jueves", "orange"), ("Viernes", "purple"), ("Sábado", "pink"), ("Domingo", "red"))
+            ]}},
+            "Inicio": {"rich_text": {}},
+            "Fin": {"rich_text": {}},
+            "Tipo": {"select": {"options": [
+                {"name": "Teoría", "color": "blue"}, {"name": "Prácticas", "color": "green"}]}},
+            "Notas": {"rich_text": {}},
+        },
+    })
+    print("✅ Base de datos Horario creada (rellénala con tus clases: día, inicio y fin tipo 9:30)")
+
     contenido = [
         {"object": "block", "type": "heading_2",
          "heading_2": {"rich_text": [{"text": {"content": "📝 Tareas y notas"}}]}},
@@ -143,6 +163,7 @@ def main():
         "EXAMENES_DB_ID": exam_db["id"].replace("-", ""),
         "ASIGNATURAS_DB_ID": asig_db["id"].replace("-", ""),
         "NOTAS_RAPIDAS_PAGE_ID": notas["id"].replace("-", ""),
+        "HORARIO_DB_ID": horario_db["id"].replace("-", ""),
     })
     print("\n🎉 Listo. He guardado los IDs en .env. Ya puedes arrancar el bot con: python bot.py")
 

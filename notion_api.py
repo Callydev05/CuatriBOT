@@ -41,8 +41,10 @@ class Pendiente:
 
 
 class Notion:
-    def __init__(self, token: str, examenes_db: str, asignaturas_db: str, notas_rapidas_page: str | None):
+    def __init__(self, token: str, examenes_db: str, asignaturas_db: str, notas_rapidas_page: str | None,
+                 horario_db: str | None = None):
         self.examenes_db = _id(examenes_db)
+        self.horario_db = _id(horario_db) if horario_db else None
         self.asignaturas_db = _id(asignaturas_db)
         self.notas_rapidas_page = _id(notas_rapidas_page) if notas_rapidas_page else None
         self.http = httpx.AsyncClient(
@@ -190,3 +192,29 @@ class Notion:
         por_asig = {a.abrev: r for a, r in zip(asigs, resultados) if r}
         rapidas = await self.todos_de_pagina(self.notas_rapidas_page) if self.notas_rapidas_page else []
         return por_asig, rapidas
+
+    # ---------- Horario ----------
+
+    async def clases_del_dia(self, dia: str) -> list[dict]:
+        """Clases de un día de la semana ("Lunes", "Martes"...), ordenadas por hora de inicio."""
+        if not self.horario_db:
+            return []
+        paginas = await self._query(self.horario_db, {
+            "filter": {"property": "Día", "select": {"equals": dia}},
+        })
+        clases = []
+        for p in paginas:
+            props = p["properties"]
+            clases.append({
+                "clase": _texto(props.get("Clase", {}).get("title", [])) or "(sin nombre)",
+                "inicio": _texto(props.get("Inicio", {}).get("rich_text", [])),
+                "fin": _texto(props.get("Fin", {}).get("rich_text", [])),
+                "tipo": (props.get("Tipo", {}).get("select") or {}).get("name", ""),
+                "notas": _texto(props.get("Notas", {}).get("rich_text", [])),
+            })
+
+        def clave(c):  # "8:30" y "08:30" se ordenan igual
+            h, _, m = c["inicio"].partition(":")
+            return (int(h) if h.isdigit() else 99, int(m) if m.isdigit() else 0)
+
+        return sorted(clases, key=clave)

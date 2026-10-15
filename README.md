@@ -24,7 +24,9 @@ Cada persona usa **su propio bot y su propio Notion**: nadie ve las cosas de nad
 - Lo que escribas en una **segunda línea** se guarda como notas.
 - Tras guardar te responde con lo que ha entendido y un botón **↩️ Deshacer**.
 
-Comandos: `/pendientes`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/ayuda`, `/id`.
+Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/ayuda`, `/id`.
+
+**Horario:** `/horario` te dice las clases de hoy; también `/horario mañana` o `/horario viernes`. Lee la base de datos **Horario** de Notion: una fila por clase con *Día*, *Inicio* y *Fin* (por ejemplo `9:30` y `11:30`), *Tipo* (Teoría/Prácticas) y *Notas* opcionales (aula, profesor...).
 
 ## Instalación
 
@@ -52,7 +54,7 @@ En Telegram, abre **@BotFather** → `/newbot`, ponle nombre y usuario (acabado 
    ```bash
    python setup_notion.py "<enlace de tu página>"
    ```
-   Te pedirá tus asignaturas (`Matemáticas:MAT, Programación:PROG, Física, ...`), creará todo dentro de la página y guardará los IDs en el `.env`.
+   Te pedirá tus asignaturas (`Matemáticas:MAT, Programación:PROG, Física, ...`), creará todo dentro de la página (asignaturas, exámenes y entregas, horario y notas rápidas) y guardará los IDs en el `.env`. Después rellena la base **Horario** con tus clases.
 
 ### 4. Arrancar
 ```bash
