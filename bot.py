@@ -354,7 +354,36 @@ async def post_shutdown(app: Application):
         await n.close()
 
 
+def iniciar_web_salud():
+    """Mini web para hostings tipo Render que exigen un puerto abierto.
+    Solo se activa si existe la variable PORT. Responde "ok" a cualquier visita."""
+    puerto = os.environ.get("PORT")
+    if not puerto:
+        return
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Salud(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass  # sin ruido en los logs
+
+    servidor = HTTPServer(("0.0.0.0", int(puerto)), Salud)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    log.info("Web de salud escuchando en el puerto %s", puerto)
+
+
 def main():
+    iniciar_web_salud()
     app = (Application.builder().token(TELEGRAM_TOKEN)
            .post_init(post_init).post_shutdown(post_shutdown).build())
     app.add_handler(CommandHandler("start", cmd_start))
