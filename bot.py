@@ -16,6 +16,7 @@ Comandos:
     /estudiar    empieza a contar tiempo de estudio: /estudiar BBDD
     /parar       termina y guarda la sesión de estudio
     /stats       horas de estudio por asignatura esta semana
+    /comandos    panel de botones con el resto de comandos
     /ayuda      cómo escribir los mensajes
     /id          muestra el id de este chat
 """
@@ -31,7 +32,8 @@ from dotenv import load_dotenv
 # Antes de importar notion_api: ahí se lee ZONA_HORARIA al importar
 load_dotenv()
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram import (BotCommand, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup,  # noqa: E402
+                      ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode  # noqa: E402
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # noqa: E402
                           ContextTypes, MessageHandler, filters)
@@ -39,7 +41,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # 
 from calculos import (Nota, fmt_duracion, fmt_num, minutos_por_asignatura,  # noqa: E402
                       parsear_nota, resumen_notas)
 from notion_api import TZ, Notion, NotionError, Pendiente  # noqa: E402
-from parsing import Asignatura, analizar, buscar_asignatura  # noqa: E402
+from parsing import Asignatura, analizar, buscar_asignatura, norm  # noqa: E402
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -84,7 +86,8 @@ AYUDA = (
     "<code>/notas IGV</code> te da la media y lo que necesitas para aprobar.\n\n"
     "<b>Estudio</b>: <code>/estudiar BBDD</code> empieza a contar, /parar lo guarda "
     "y /stats te enseña las horas de la semana.\n\n"
-    "/pendientes · /horario · /avisos · /hecho · /notas · /stats · /ayuda"
+    "Usa los botones de abajo o escribe: /pendientes · /horario · /avisos · /hecho · /notas · /stats · "
+    "/comandos · /ayuda"
 )
 
 
@@ -236,7 +239,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if not autorizado(update):
         return
-    await update.message.reply_text("👋 ¡Listo! " + AYUDA, parse_mode=ParseMode.HTML)
+    await update.message.reply_text("👋 ¡Listo! " + AYUDA, parse_mode=ParseMode.HTML, reply_markup=PANEL_INICIO)
 
 
 async def cmd_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -246,7 +249,7 @@ async def cmd_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_ayuda(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if autorizado(update):
-        await update.message.reply_text(AYUDA, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(AYUDA, parse_mode=ParseMode.HTML, reply_markup=PANEL_INICIO)
 
 
 async def cmd_pendientes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -566,8 +569,91 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
 
 
+# ---------------- panel de botones ----------------
+# Teclado fijo bajo la caja de texto. Cada botón manda su texto como un mensaje normal: on_panel lo
+# reconoce y ejecuta el comando o, si al comando le faltan datos, se los pide (ForceReply).
+
+# Comandos que necesitan datos: (pregunta, pista gris en la caja de texto, comando)
+PREGUNTAS = {
+    "notas": ("📊 ¿De qué asignatura? Escribe su abreviatura (por ejemplo IGV) o «todas».",
+              "IGV, BBDD o todas", cmd_notas),
+    "estudiar": ("⏱ ¿Qué vas a estudiar? Escribe la asignatura.", "BBDD", cmd_estudiar),
+    "nota": ("📝 Escribe asignatura, nombre, nota y peso.\nEjemplo: IGV práctica1 8.5 30%",
+             "IGV práctica1 8.5 30%", cmd_nota),
+}
+
+# Texto del botón → comando sin datos (función) o que los pide (clave de PREGUNTAS)
+BOTONES = {
+    "❓ Ayuda": cmd_ayuda,
+    "📊 Notas": "notas",
+    "⏱ Estudiar": "estudiar",
+    "📋 Comandos": "comandos",
+    "📋 Pendientes": cmd_pendientes,
+    "🗓 Horario": cmd_horario,
+    "🔔 Avisos": cmd_avisos,
+    "✅ Hecho": cmd_hecho,
+    "📝 Apuntar nota": "nota",
+    "⏹ Parar": cmd_parar,
+    "📈 Stats": cmd_stats,
+    "⬅️ Volver": "volver",
+}
+
+PANEL_INICIO = ReplyKeyboardMarkup([["❓ Ayuda", "📊 Notas"], ["⏱ Estudiar", "📋 Comandos"]],
+                                   resize_keyboard=True, is_persistent=True)
+PANEL_COMANDOS = ReplyKeyboardMarkup(
+    [["📋 Pendientes", "🗓 Horario"], ["🔔 Avisos", "✅ Hecho"],
+     ["📝 Apuntar nota", "⏹ Parar"], ["📈 Stats", "⬅️ Volver"]],
+    resize_keyboard=True, is_persistent=True)
+
+
+async def cmd_comandos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if autorizado(update):
+        await update.message.reply_text("📋 Resto de comandos. Pulsa ⬅️ Volver para el panel principal.",
+                                        reply_markup=PANEL_COMANDOS)
+
+
+async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE, clave: str):
+    pregunta, pista, _ = PREGUNTAS[clave]
+    msg = await update.message.reply_text(
+        pregunta, reply_markup=ForceReply(selective=True, input_field_placeholder=pista))
+    # La respuesta a este mensaje se tomará como los datos del comando (ver on_mensaje)
+    ctx.user_data["pendiente"] = {"comando": clave, "msg_id": msg.message_id}
+
+
+async def on_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update):
+        return
+    ctx.user_data.pop("pendiente", None)
+    accion = BOTONES[update.message.text]
+    if accion == "comandos":
+        await cmd_comandos(update, ctx)
+    elif accion == "volver":
+        await update.message.reply_text("Panel principal.", reply_markup=PANEL_INICIO)
+    elif isinstance(accion, str):
+        await preguntar(update, ctx, accion)
+    else:
+        ctx.args = []  # como si se hubiera escrito el comando sin nada detrás
+        await accion(update, ctx)
+
+
+async def responder_pregunta(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Si el mensaje responde a una pregunta del panel, ejecuta ese comando con lo escrito."""
+    pendiente = ctx.user_data.get("pendiente")
+    respuesta_a = update.message.reply_to_message
+    if not (pendiente and respuesta_a and respuesta_a.message_id == pendiente["msg_id"]):
+        return False
+    del ctx.user_data["pendiente"]
+    clave = pendiente["comando"]
+    texto = update.message.text.strip()
+    ctx.args = [] if clave == "notas" and norm(texto) == "todas" else texto.split()
+    await PREGUNTAS[clave][2](update, ctx)
+    return True
+
+
 async def on_mensaje(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
+        return
+    if await responder_pregunta(update, ctx):
         return
     n = notion(ctx)
     ref = hoy()
@@ -644,6 +730,20 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
 async def post_init(app: Application):
     app.bot_data["notion"] = Notion(NOTION_TOKEN, EXAMENES_DB_ID, ASIGNATURAS_DB_ID, NOTAS_RAPIDAS_PAGE_ID,
                                     HORARIO_DB_ID, NOTAS_DB_ID, ESTUDIO_DB_ID)
+    # Lista del botón "Menú" de Telegram
+    await app.bot.set_my_commands([
+        BotCommand("ayuda", "Cómo usar el bot y mostrar el panel"),
+        BotCommand("comandos", "Panel con el resto de comandos"),
+        BotCommand("pendientes", "Resumen de lo pendiente"),
+        BotCommand("horario", "Clases de hoy (o mañana, viernes...)"),
+        BotCommand("nota", "Apuntar nota: IGV práctica1 8.5 30%"),
+        BotCommand("notas", "Media y nota para aprobar: IGV"),
+        BotCommand("estudiar", "Empezar a contar estudio: BBDD"),
+        BotCommand("parar", "Terminar y guardar el estudio"),
+        BotCommand("stats", "Horas de estudio de la semana"),
+        BotCommand("hecho", "Marcar cosas como hechas"),
+        BotCommand("avisos", "Avisos de hoy"),
+    ])
     if CHAT_ID:
         h, m = (int(x) for x in HORA_RESUMEN.split(":"))
         app.job_queue.run_daily(tarea_diaria, time=time(h, m, tzinfo=TZ), name="diario")
@@ -704,7 +804,10 @@ def main():
     app.add_handler(CommandHandler("estudiar", cmd_estudiar, filters=nuevos))
     app.add_handler(CommandHandler("parar", cmd_parar, filters=nuevos))
     app.add_handler(CommandHandler("stats", cmd_stats, filters=nuevos))
+    app.add_handler(CommandHandler("comandos", cmd_comandos, filters=nuevos))
     app.add_handler(CallbackQueryHandler(on_boton))
+    # Antes que on_mensaje: si no, el texto de los botones se guardaría como tarea
+    app.add_handler(MessageHandler(nuevos & filters.Text(list(BOTONES)), on_panel))
     app.add_handler(MessageHandler(nuevos & filters.TEXT & ~filters.COMMAND, on_mensaje))
     app.add_error_handler(on_error)
     log.info("Bot en marcha")

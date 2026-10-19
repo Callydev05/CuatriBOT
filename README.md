@@ -26,6 +26,8 @@ Cada persona usa **su propio bot y su propio Notion**: nadie ve las cosas de nad
 
 Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/nota`, `/notas`, `/estudiar`, `/parar`, `/stats`, `/ayuda`, `/id`.
 
+**Panel de botones:** bajo la caja de texto tienes *❓ Ayuda*, *📊 Notas*, *⏱ Estudiar* y *📋 Comandos* (este último abre el resto de comandos; *⬅️ Volver* regresa). Los botones de comandos que necesitan datos (Notas, Estudiar, Apuntar nota) no ejecutan nada: te preguntan lo que falta y lo ejecutan cuando respondes. Si no ves el panel, manda `/ayuda`.
+
 **Horario:** `/horario` te dice las clases de hoy; también `/horario mañana` o `/horario viernes`. Lee la base de datos **Horario** de Notion: una fila por clase con *Día*, *Inicio* y *Fin* (por ejemplo `9:30` y `11:30`), *Tipo* (Teoría/Prácticas) y *Notas* opcionales (aula, profesor...).
 
 **Notas:** `/nota IGV práctica1 8.5 30%` guarda en la base **Notas** que en la práctica 1 de IGV sacaste un 8,5 y que vale el 30 % de la nota final (vale `8,5` y `30` sin `%`). `/notas IGV` te dice la media de lo evaluado, los puntos que llevas sobre 10 y qué nota media necesitas en lo que queda para llegar al 5. `/notas` a secas resume todas las asignaturas.
