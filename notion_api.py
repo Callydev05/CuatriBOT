@@ -206,12 +206,13 @@ class Notion:
         """Clases de un día de la semana ("Lunes", "Martes"...), ordenadas por hora de inicio."""
         if not self.horario_db:
             return []
-        paginas = await self._query(self.horario_db, {
-            "filter": {"property": "Día", "select": {"equals": dia}},
-        })
+        # Filtramos aquí y no en Notion: si el día no existe como opción (p. ej. "Sábado"), Notion da error 400
+        paginas = await self._query(self.horario_db)
         clases = []
         for p in paginas:
             props = p["properties"]
+            if (props.get("Día", {}).get("select") or {}).get("name") != dia:
+                continue
             clases.append({
                 "clase": _texto(props.get("Clase", {}).get("title", [])) or "(sin nombre)",
                 "inicio": _texto(props.get("Inicio", {}).get("rich_text", [])),
