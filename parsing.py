@@ -165,6 +165,12 @@ def _extraer_asignatura(t: _Texto, asignaturas: list[Asignatura]) -> Asignatura 
     return None
 
 
+def buscar_asignatura(texto: str, asignaturas: list[Asignatura]) -> Asignatura | None:
+    """Asignatura cuyo nombre, abreviatura o alias sea exactamente 'texto' (sin mirar tildes ni mayúsculas)."""
+    t = norm(texto).strip()
+    return next((a for a in asignaturas if t in a.alias()), None)
+
+
 def _limpiar_nombre(s: str) -> str:
     palabras = s.split()
     while palabras and norm(palabras[0]) in STOPWORDS_BORDE:

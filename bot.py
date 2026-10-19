@@ -11,7 +11,12 @@ Comandos:
     /avisos      los avisos de hoy ahora mismo (para probar)
     /hecho       marcar cosas como hechas
     /horario     clases de hoy (o /horario mañana, /horario viernes)
-    /ayuda       cómo escribir los mensajes
+    /nota        apunta una nota: /nota IGV práctica1 8.5 30%
+    /notas       media y nota necesaria para aprobar (/notas IGV, o /notas para todas)
+    /estudiar    empieza a contar tiempo de estudio: /estudiar BBDD
+    /parar       termina y guarda la sesión de estudio
+    /stats       horas de estudio por asignatura esta semana
+    /ayuda      cómo escribir los mensajes
     /id          muestra el id de este chat
 """
 from __future__ import annotations
@@ -31,8 +36,10 @@ from telegram.constants import ParseMode  # noqa: E402
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # noqa: E402
                           ContextTypes, MessageHandler, filters)
 
+from calculos import (Nota, fmt_duracion, fmt_num, minutos_por_asignatura,  # noqa: E402
+                      parsear_nota, resumen_notas)
 from notion_api import TZ, Notion, NotionError, Pendiente  # noqa: E402
-from parsing import analizar  # noqa: E402
+from parsing import Asignatura, analizar, buscar_asignatura  # noqa: E402
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -45,6 +52,8 @@ EXAMENES_DB_ID = os.environ.get("EXAMENES_DB_ID", "")
 ASIGNATURAS_DB_ID = os.environ.get("ASIGNATURAS_DB_ID", "")
 NOTAS_RAPIDAS_PAGE_ID = os.environ.get("NOTAS_RAPIDAS_PAGE_ID", "")
 HORARIO_DB_ID = os.environ.get("HORARIO_DB_ID", "")
+NOTAS_DB_ID = os.environ.get("NOTAS_DB_ID", "")
+ESTUDIO_DB_ID = os.environ.get("ESTUDIO_DB_ID", "")
 if not (EXAMENES_DB_ID and ASIGNATURAS_DB_ID):
     raise SystemExit("Faltan EXAMENES_DB_ID y ASIGNATURAS_DB_ID en .env. Ejecuta antes: python setup_notion.py")
 HORA_RESUMEN = os.environ.get("HORA_RESUMEN", "09:00")
@@ -71,7 +80,11 @@ AYUDA = (
     f"Te aviso cada día a las {HORA_RESUMEN} desde {DIAS_AVISO} días antes de cada fecha, "
     "y te mando un resumen de todo lo pendiente.\n\n"
     "<b>Horario</b>: /horario (hoy), /horario mañana o /horario viernes\n\n"
-    "/pendientes · /horario · /avisos · /hecho · /ayuda"
+    "<b>Notas</b>: <code>/nota IGV práctica1 8.5 30%</code> la apunta; "
+    "<code>/notas IGV</code> te da la media y lo que necesitas para aprobar.\n\n"
+    "<b>Estudio</b>: <code>/estudiar BBDD</code> empieza a contar, /parar lo guarda "
+    "y /stats te enseña las horas de la semana.\n\n"
+    "/pendientes · /horario · /avisos · /hecho · /notas · /stats · /ayuda"
 )
 
 
@@ -333,6 +346,226 @@ async def cmd_horario(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto_horario(clases, dia, ref), parse_mode=ParseMode.HTML)
 
 
+# ---------------- notas ----------------
+
+def texto_notas(asig: Asignatura, notas: list[Nota]) -> str:
+    titulo = f"📊 <b>Notas de {html.escape(asig.nombre)}</b>"
+    if not notas:
+        return f"{titulo}\n\nAún no tienes notas. Apunta una con /nota {html.escape(asig.abrev)} práctica1 8.5 30%"
+    r = resumen_notas(notas)
+    lineas = [titulo, ""]
+    lineas += [f"• {html.escape(n.nombre)}: <b>{fmt_num(n.nota)}</b> ({fmt_num(n.peso)} %)" for n in notas]
+    lineas.append("")
+    if r.peso_evaluado > 100:
+        lineas.append(f"⚠️ Los pesos suman {fmt_num(r.peso_evaluado)} %, más de 100. Revisa las notas en Notion.")
+    if r.media is not None:
+        lineas.append(f"Media de lo evaluado: <b>{fmt_num(r.media)}</b> ({fmt_num(r.peso_evaluado)} % de la nota)")
+    lineas.append(f"Llevas <b>{fmt_num(r.puntos)}</b> puntos de 10.")
+    if r.necesaria is None:
+        estado = "✅ aprobada" if r.puntos >= 5 else "❌ suspensa"
+        lineas.append(f"\n🏁 Todo evaluado: nota final <b>{fmt_num(r.puntos)}</b>, {estado}.")
+    elif r.necesaria <= 0:
+        lineas.append(f"\n✅ Ya tienes el aprobado asegurado, saques lo que saques en el {fmt_num(r.restante)} % que queda.")
+    elif r.necesaria > 10:
+        lineas.append(f"\n😬 Ni con un 10 en el {fmt_num(r.restante)} % que queda llegas al 5.")
+    else:
+        lineas.append(f"\n🎯 Para aprobar necesitas un <b>{fmt_num(r.necesaria)}</b> "
+                      f"de media en el {fmt_num(r.restante)} % que queda.")
+    return "\n".join(lineas)
+
+
+def texto_todas_notas(asigs: list[Asignatura], notas: list[Nota]) -> str:
+    lineas = ["📊 <b>Notas</b>", ""]
+    for a in asigs:
+        suyas = [n for n in notas if a.id in n.asignaturas]
+        if not suyas:
+            continue
+        r = resumen_notas(suyas)
+        linea = f"• <b>{html.escape(a.abrev)}</b>: llevas {fmt_num(r.puntos)} ({fmt_num(r.peso_evaluado)} % evaluado)"
+        if r.necesaria is not None and 0 < r.necesaria <= 10:
+            linea += f" · necesitas un {fmt_num(r.necesaria)}"
+        elif r.necesaria is not None and r.necesaria <= 0:
+            linea += " · ✅ aprobada"
+        lineas.append(linea)
+    if len(lineas) == 2:
+        return "Aún no tienes notas. Apunta una con <code>/nota IGV práctica1 8.5 30%</code>"
+    lineas.append("\nDetalle de una asignatura: <code>/notas IGV</code>")
+    return "\n".join(lineas)
+
+
+async def cmd_nota(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update):
+        return
+    if not NOTAS_DB_ID:
+        await update.message.reply_text("No tengo configuradas las notas. Ejecuta otra vez setup_notion.py "
+                                        "(o añade NOTAS_DB_ID en el .env) y reinicia el bot.")
+        return
+    try:
+        alias, nombre, nota, peso = parsear_nota(ctx.args)
+    except ValueError as e:
+        await update.message.reply_text(f"{e}\nEjemplo: <code>/nota IGV práctica1 8.5 30%</code>",
+                                        parse_mode=ParseMode.HTML)
+        return
+    n = notion(ctx)
+    try:
+        asig = buscar_asignatura(alias, await n.asignaturas())
+        if not asig:
+            await update.message.reply_text(f"No conozco la asignatura «{alias}». "
+                                            "Usa su nombre o abreviatura de Notion.")
+            return
+        pagina = await n.guardar_nota(asig.id, nombre, nota, peso)
+        notas = await n.notas(asig.id)
+    except NotionError as e:
+        log.error("Error guardando la nota: %s", e)
+        await update.message.reply_text("⚠️ No he podido guardar la nota en Notion.")
+        return
+    texto = f"✅ <b>Guardada</b> · {html.escape(nombre)}: {fmt_num(nota)} ({fmt_num(peso)} %)\n\n"
+    teclado = InlineKeyboardMarkup([[InlineKeyboardButton(
+        "↩️ Deshacer", callback_data=f"undo:{pagina['id'].replace('-', '')}")]])
+    await update.message.reply_text(texto + texto_notas(asig, notas), parse_mode=ParseMode.HTML,
+                                    reply_markup=teclado)
+
+
+async def cmd_notas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update):
+        return
+    if not NOTAS_DB_ID:
+        await update.message.reply_text("No tengo configuradas las notas. Ejecuta otra vez setup_notion.py "
+                                        "(o añade NOTAS_DB_ID en el .env) y reinicia el bot.")
+        return
+    n = notion(ctx)
+    try:
+        asigs = await n.asignaturas()
+        if ctx.args:
+            asig = buscar_asignatura(" ".join(ctx.args), asigs)
+            if not asig:
+                await update.message.reply_text(f"No conozco la asignatura «{' '.join(ctx.args)}».")
+                return
+            texto = texto_notas(asig, await n.notas(asig.id))
+        else:
+            texto = texto_todas_notas(asigs, await n.notas())
+    except NotionError as e:
+        log.error("Error leyendo las notas: %s", e)
+        await update.message.reply_text("⚠️ No he podido leer las notas de Notion.")
+        return
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+
+
+# ---------------- horas de estudio ----------------
+
+def inicio_semana(ref: date) -> date:
+    return ref - timedelta(days=ref.weekday())
+
+
+def texto_stats(minutos: dict[str, int], asigs: list[Asignatura], desde: date) -> str:
+    lineas = [f"📈 <b>Horas de estudio esta semana</b> (desde el {DIAS[desde.weekday()]} "
+              f"{desde.day} de {MESES[desde.month - 1]})", ""]
+    nombres = {a.id: a.abrev for a in asigs}
+    nombres[""] = "Sin asignatura"
+    filas = sorted(((m, nombres.get(a, "?")) for a, m in minutos.items() if m > 0), reverse=True)
+    if not filas:
+        lineas.append("Aún no has estudiado nada esta semana. Empieza con <code>/estudiar BBDD</code>")
+    else:
+        maximo = filas[0][0]
+        for m, nombre in filas:
+            barra = "▓" * max(1, round(10 * m / maximo))
+            lineas.append(f"<b>{html.escape(nombre)}</b> {barra} {fmt_duracion(m)}")
+        lineas.append(f"\nTotal: <b>{fmt_duracion(sum(m for m, _ in filas))}</b>")
+    olvidadas = [a.abrev for a in asigs if not minutos.get(a.id)]
+    if olvidadas:
+        lineas.append(f"\n😴 Sin tocar esta semana: {html.escape(', '.join(olvidadas))}")
+    return "\n".join(lineas)
+
+
+async def comprobar_estudio(update: Update) -> bool:
+    if ESTUDIO_DB_ID:
+        return True
+    await update.message.reply_text("No tengo configurado el registro de estudio. Ejecuta otra vez "
+                                    "setup_notion.py (o añade ESTUDIO_DB_ID en el .env) y reinicia el bot.")
+    return False
+
+
+async def cmd_estudiar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update) or not await comprobar_estudio(update):
+        return
+    if not ctx.args:
+        await update.message.reply_text("¿Qué vas a estudiar? Ejemplo: <code>/estudiar BBDD</code>",
+                                        parse_mode=ParseMode.HTML)
+        return
+    n = notion(ctx)
+    try:
+        asigs = await n.asignaturas()
+        asig = buscar_asignatura(" ".join(ctx.args), asigs)
+        if not asig:
+            await update.message.reply_text(f"No conozco la asignatura «{' '.join(ctx.args)}».")
+            return
+        actual = await n.estudio_en_curso()
+        if actual:
+            abrevs = {a.id: a.abrev for a in asigs}
+            de_que = ", ".join(abrevs.get(a, "?") for a in actual.asignaturas) or "algo"
+            await update.message.reply_text(f"Ya estás estudiando {de_que} desde las "
+                                            f"{actual.inicio:%H:%M}. Usa /parar antes de empezar otra.")
+            return
+        await n.empezar_estudio(asig)
+    except NotionError as e:
+        log.error("Error empezando a estudiar: %s", e)
+        await update.message.reply_text("⚠️ No he podido guardar la sesión en Notion.")
+        return
+    await update.message.reply_text(f"⏱ Empiezo a contar <b>{html.escape(asig.nombre)}</b> "
+                                    f"({datetime.now(TZ):%H:%M}). Cuando acabes: /parar",
+                                    parse_mode=ParseMode.HTML)
+
+
+async def cmd_parar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update) or not await comprobar_estudio(update):
+        return
+    n = notion(ctx)
+    try:
+        sesion = await n.estudio_en_curso()
+        if not sesion:
+            await update.message.reply_text("No estabas estudiando nada. Empieza con /estudiar BBDD")
+            return
+        minutos = int((datetime.now(TZ) - sesion.inicio).total_seconds() // 60)
+        if minutos < 1:
+            await n.borrar(sesion.id)
+            await update.message.reply_text("Ha sido menos de un minuto, no lo guardo.")
+            return
+        await n.terminar_estudio(sesion.id, minutos)
+        desde = inicio_semana(hoy())
+        semana = minutos_por_asignatura(await n.sesiones_desde(desde), desde)
+        abrevs = await abrevs_por_id(n)
+    except NotionError as e:
+        log.error("Error parando el estudio: %s", e)
+        await update.message.reply_text("⚠️ No he podido guardar la sesión en Notion.")
+        return
+    lineas = [f"✅ Guardado: <b>{fmt_duracion(minutos)}</b>"]
+    for a in sesion.asignaturas:
+        lineas[0] += f" de {html.escape(abrevs.get(a, '?'))}"
+        # max(): la consulta de Notion puede no ver aún la sesión que acabamos de cerrar
+        lineas.append(f"Esta semana llevas {fmt_duracion(max(semana.get(a, 0), minutos))} en "
+                      f"{html.escape(abrevs.get(a, '?'))}.")
+    await update.message.reply_text("\n".join(lineas), parse_mode=ParseMode.HTML)
+
+
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update) or not await comprobar_estudio(update):
+        return
+    n = notion(ctx)
+    desde = inicio_semana(hoy())
+    try:
+        sesiones = await n.sesiones_desde(desde)
+        asigs = await n.asignaturas()
+    except NotionError as e:
+        log.error("Error leyendo las sesiones de estudio: %s", e)
+        await update.message.reply_text("⚠️ No he podido leer las horas de estudio de Notion.")
+        return
+    texto = texto_stats(minutos_por_asignatura(sesiones, desde), asigs, desde)
+    en_curso = next((s for s in sesiones if s.minutos is None), None)
+    if en_curso:
+        texto += f"\n\n⏱ Ahora mismo estás estudiando (desde las {en_curso.inicio:%H:%M}). /parar para guardarlo."
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+
+
 async def on_mensaje(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
         return
@@ -410,7 +643,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     app.bot_data["notion"] = Notion(NOTION_TOKEN, EXAMENES_DB_ID, ASIGNATURAS_DB_ID, NOTAS_RAPIDAS_PAGE_ID,
-                                    HORARIO_DB_ID)
+                                    HORARIO_DB_ID, NOTAS_DB_ID, ESTUDIO_DB_ID)
     if CHAT_ID:
         h, m = (int(x) for x in HORA_RESUMEN.split(":"))
         app.job_queue.run_daily(tarea_diaria, time=time(h, m, tzinfo=TZ), name="diario")
@@ -466,6 +699,11 @@ def main():
     app.add_handler(CommandHandler("avisos", cmd_avisos, filters=nuevos))
     app.add_handler(CommandHandler("hecho", cmd_hecho, filters=nuevos))
     app.add_handler(CommandHandler("horario", cmd_horario, filters=nuevos))
+    app.add_handler(CommandHandler("nota", cmd_nota, filters=nuevos))
+    app.add_handler(CommandHandler("notas", cmd_notas, filters=nuevos))
+    app.add_handler(CommandHandler("estudiar", cmd_estudiar, filters=nuevos))
+    app.add_handler(CommandHandler("parar", cmd_parar, filters=nuevos))
+    app.add_handler(CommandHandler("stats", cmd_stats, filters=nuevos))
     app.add_handler(CallbackQueryHandler(on_boton))
     app.add_handler(MessageHandler(nuevos & filters.TEXT & ~filters.COMMAND, on_mensaje))
     app.add_error_handler(on_error)

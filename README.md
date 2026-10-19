@@ -24,9 +24,13 @@ Cada persona usa **su propio bot y su propio Notion**: nadie ve las cosas de nad
 - Lo que escribas en una **segunda línea** se guarda como notas.
 - Tras guardar te responde con lo que ha entendido y un botón **↩️ Deshacer**.
 
-Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/ayuda`, `/id`.
+Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/nota`, `/notas`, `/estudiar`, `/parar`, `/stats`, `/ayuda`, `/id`.
 
 **Horario:** `/horario` te dice las clases de hoy; también `/horario mañana` o `/horario viernes`. Lee la base de datos **Horario** de Notion: una fila por clase con *Día*, *Inicio* y *Fin* (por ejemplo `9:30` y `11:30`), *Tipo* (Teoría/Prácticas) y *Notas* opcionales (aula, profesor...).
+
+**Notas:** `/nota IGV práctica1 8.5 30%` guarda en la base **Notas** que en la práctica 1 de IGV sacaste un 8,5 y que vale el 30 % de la nota final (vale `8,5` y `30` sin `%`). `/notas IGV` te dice la media de lo evaluado, los puntos que llevas sobre 10 y qué nota media necesitas en lo que queda para llegar al 5. `/notas` a secas resume todas las asignaturas.
+
+**Horas de estudio:** `/estudiar BBDD` empieza a contar, `/parar` guarda la sesión en la base **Sesiones de estudio** y `/stats` muestra las horas por asignatura de esta semana (desde el lunes) y cuáles no has tocado. La sesión en curso se guarda en Notion, así que no se pierde aunque el bot se reinicie.
 
 ## Instalación
 
@@ -54,7 +58,9 @@ En Telegram, abre **@BotFather** → `/newbot`, ponle nombre y usuario (acabado 
    ```bash
    python setup_notion.py "<enlace de tu página>"
    ```
-   Te pedirá tus asignaturas (`Matemáticas:MAT, Programación:PROG, Física, ...`), creará todo dentro de la página (asignaturas, exámenes y entregas, horario y notas rápidas) y guardará los IDs en el `.env`. Después rellena la base **Horario** con tus clases.
+   Te pedirá tus asignaturas (`Matemáticas:MAT, Programación:PROG, Física, ...`), creará todo dentro de la página (asignaturas, exámenes y entregas, horario, notas, sesiones de estudio y notas rápidas) y guardará los IDs en el `.env`. Después rellena la base **Horario** con tus clases.
+
+   **¿Actualizas desde una versión anterior?** Vuelve a ejecutar el mismo comando: solo crea lo que falte en el `.env` (por ejemplo *Notas* y *Sesiones de estudio*) y no toca lo que ya tienes.
 
 ### 4. Arrancar
 ```bash
@@ -86,9 +92,18 @@ Se reinicia solo si falla o si se reinicia el servidor. **No ejecutes el mismo b
 
 Reinicia el bot tras cambiarlos.
 
+## Tests
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+Prueban la lógica que no depende de Telegram ni de Notion (`calculos.py` y la búsqueda de asignaturas).
+
 ## Archivos
 - `bot.py` — Telegram: mensajes, botones, avisos y resumen diario.
 - `parsing.py` — entiende los mensajes (tipo, asignatura, fecha, hora).
+- `calculos.py` — medias, nota necesaria para aprobar y horas de estudio (sin Telegram ni Notion).
+- `tests/` — tests con pytest.
 - `notion_api.py` — lee y escribe en Notion.
 - `setup_notion.py` — crea la estructura de Notion para un usuario nuevo.
 - `cuatribot.service` — servicio systemd para dejarlo 24/7 en Linux.

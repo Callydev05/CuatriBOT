@@ -5,11 +5,12 @@ import asyncio
 import os
 import time as _time
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
 
+from calculos import Nota, Sesion
 from parsing import Asignatura, Entrada
 
 API = "https://api.notion.com/v1"
@@ -29,6 +30,19 @@ def _id(s: str) -> str:
     return s.replace("-", "")
 
 
+def _fecha_hora(d: dict) -> datetime:
+    """Propiedad de fecha de Notion con hora → datetime en nuestra zona horaria."""
+    # Python < 3.11 no entiende la "Z" final
+    dt = datetime.fromisoformat(d["start"].replace("Z", "+00:00"))
+    if dt.tzinfo is None:  # sin desfase: la zona viene aparte o es la nuestra
+        dt = dt.replace(tzinfo=ZoneInfo(d["time_zone"]) if d.get("time_zone") else TZ)
+    return dt.astimezone(TZ)
+
+
+def _relacion(props: dict) -> list[str]:
+    return [_id(r["id"]) for r in props.get("Asignatura", {}).get("relation", [])]
+
+
 @dataclass
 class Pendiente:
     id: str
@@ -42,9 +56,11 @@ class Pendiente:
 
 class Notion:
     def __init__(self, token: str, examenes_db: str, asignaturas_db: str, notas_rapidas_page: str | None,
-                 horario_db: str | None = None):
+                 horario_db: str | None = None, notas_db: str | None = None, estudio_db: str | None = None):
         self.examenes_db = _id(examenes_db)
         self.horario_db = _id(horario_db) if horario_db else None
+        self.notas_db = _id(notas_db) if notas_db else None
+        self.estudio_db = _id(estudio_db) if estudio_db else None
         self.asignaturas_db = _id(asignaturas_db)
         self.notas_rapidas_page = _id(notas_rapidas_page) if notas_rapidas_page else None
         self.http = httpx.AsyncClient(
@@ -151,11 +167,7 @@ class Notion:
             if d and d.get("start"):
                 inicio = d["start"]
                 if "T" in inicio:
-                    # Python < 3.11 no entiende la "Z" final
-                    dt = datetime.fromisoformat(inicio.replace("Z", "+00:00"))
-                    if dt.tzinfo is None:  # sin desfase: la zona viene aparte o es la nuestra
-                        dt = dt.replace(tzinfo=ZoneInfo(d["time_zone"]) if d.get("time_zone") else TZ)
-                    dt = dt.astimezone(TZ)
+                    dt = _fecha_hora(d)
                     fecha, hora = dt.date(), dt.strftime("%H:%M")
                 else:
                     fecha = date.fromisoformat(inicio[:10])
@@ -165,7 +177,7 @@ class Notion:
                 tipo=(props.get("Tipo", {}).get("select") or {}).get("name", "Tarea"),
                 fecha=fecha,
                 hora=hora,
-                asignaturas=[_id(r["id"]) for r in props.get("Asignatura", {}).get("relation", [])],
+                asignaturas=_relacion(props),
                 url=p.get("url", ""),
             ))
         lista.sort(key=lambda x: (x.fecha is None, x.fecha or date.max, x.hora or ""))
@@ -226,3 +238,73 @@ class Notion:
             return (int(h) if h.isdigit() else 99, int(m) if m.isdigit() else 0)
 
         return sorted(clases, key=clave)
+
+    # ---------- Notas ----------
+
+    async def guardar_nota(self, asignatura_id: str, nombre: str, nota: float, peso: float) -> dict:
+        return await self._req("POST", "/pages", json={
+            "parent": {"database_id": self.notas_db},
+            "properties": {
+                "Nombre": {"title": [{"text": {"content": nombre[:2000]}}]},
+                "Asignatura": {"relation": [{"id": asignatura_id}]},
+                "Nota": {"number": nota},
+                "Peso": {"number": peso},
+            },
+        })
+
+    async def notas(self, asignatura_id: str | None = None) -> list[Nota]:
+        """Notas de una asignatura (o de todas), en el orden en que se apuntaron."""
+        body: dict = {"sorts": [{"timestamp": "created_time", "direction": "ascending"}]}
+        if asignatura_id:
+            body["filter"] = {"property": "Asignatura", "relation": {"contains": asignatura_id}}
+        lista = []
+        for p in await self._query(self.notas_db, body):
+            props = p["properties"]
+            nota = props.get("Nota", {}).get("number")
+            peso = props.get("Peso", {}).get("number")
+            if nota is None or peso is None:  # fila a medio rellenar en Notion
+                continue
+            lista.append(Nota(nombre=_texto(props.get("Nombre", {}).get("title", [])) or "Nota",
+                              nota=nota, peso=peso, asignaturas=_relacion(props)))
+        return lista
+
+    # ---------- Sesiones de estudio ----------
+
+    @staticmethod
+    def _sesion(p: dict) -> Sesion | None:
+        props = p["properties"]
+        d = props.get("Inicio", {}).get("date")
+        if not d or "T" not in (d.get("start") or ""):
+            return None
+        return Sesion(id=_id(p["id"]), asignaturas=_relacion(props), inicio=_fecha_hora(d),
+                      minutos=props.get("Minutos", {}).get("number"))
+
+    async def empezar_estudio(self, asignatura: Asignatura) -> dict:
+        return await self._req("POST", "/pages", json={
+            "parent": {"database_id": self.estudio_db},
+            "properties": {
+                "Nombre": {"title": [{"text": {"content": f"Estudio {asignatura.abrev}"}}]},
+                "Asignatura": {"relation": [{"id": asignatura.id}]},
+                "Inicio": {"date": {"start": datetime.now(TZ).isoformat(timespec="seconds")}},
+            },
+        })
+
+    async def estudio_en_curso(self) -> Sesion | None:
+        """La sesión empezada con /estudiar y aún sin /parar (la que no tiene minutos)."""
+        paginas = await self._query(self.estudio_db, {
+            "filter": {"property": "Minutos", "number": {"is_empty": True}},
+            "sorts": [{"property": "Inicio", "direction": "descending"}],
+        })
+        sesiones = [s for s in map(self._sesion, paginas) if s]
+        return sesiones[0] if sesiones else None
+
+    async def terminar_estudio(self, page_id: str, minutos: int):
+        await self._req("PATCH", f"/pages/{page_id}", json={"properties": {"Minutos": {"number": minutos}}})
+
+    async def sesiones_desde(self, desde: date) -> list[Sesion]:
+        # Un día de margen: Notion compara en UTC y lo estudiado a las 00:30 en España allí es aún el día
+        # anterior. El corte exacto lo hace minutos_por_asignatura con la hora local.
+        paginas = await self._query(self.estudio_db, {
+            "filter": {"property": "Inicio", "date": {"on_or_after": (desde - timedelta(days=1)).isoformat()}},
+        })
+        return [s for s in map(self._sesion, paginas) if s]

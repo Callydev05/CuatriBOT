@@ -14,7 +14,12 @@ Crea dentro de la página:
   - Base de datos "Asignaturas" (una página por asignatura con su lista de tareas)
   - Base de datos "Exámenes y entregas" (donde guarda el bot)
   - Base de datos "Horario" (tus clases semanales, para el comando /horario)
+  - Base de datos "Notas" (las notas de cada asignatura, para /nota y /notas)
+  - Base de datos "Sesiones de estudio" (para /estudiar, /parar y /stats)
   - Página "Notas rápidas"
+
+Si ya lo ejecutaste antes, solo crea lo que falte en el .env (por ejemplo, las
+bases nuevas al actualizar el bot). Lo que ya existe no se toca.
 """
 from __future__ import annotations
 
@@ -81,21 +86,102 @@ def main():
     req("GET", f"/pages/{padre}")
     print("✅ Acceso a la página correcto.\n")
 
-    print("Escribe tus asignaturas separadas por comas, con su abreviatura detrás de dos puntos.")
-    print("Ejemplo:  Matemáticas:MAT, Programación:PROG, Física, Historia")
-    texto = input("> ").strip()
-    asignaturas = []
-    for trozo in filter(None, (t.strip() for t in texto.split(","))):
-        nombre, _, abrev = trozo.partition(":")
-        asignaturas.append((nombre.strip(), (abrev or nombre).strip()))
+    nuevos: dict[str, str] = {}
 
-    asig_db = req("POST", "/databases", json={
-        "parent": {"type": "page_id", "page_id": padre},
-        "title": [{"text": {"content": "Asignaturas"}}],
-        "properties": {"Asignatura": {"title": {}}, "Abreviatura": {"rich_text": {}}},
-    })
-    print("✅ Base de datos Asignaturas creada")
+    def falta(clave: str, que: str) -> bool:
+        if os.environ.get(clave):
+            print(f"⏭  {que} ya existe ({clave} en .env), no la toco")
+            return False
+        return True
 
+    if falta("ASIGNATURAS_DB_ID", "Asignaturas"):
+        print("Escribe tus asignaturas separadas por comas, con su abreviatura detrás de dos puntos.")
+        print("Ejemplo:  Matemáticas:MAT, Programación:PROG, Física, Historia")
+        texto = input("> ").strip()
+        asignaturas = []
+        for trozo in filter(None, (t.strip() for t in texto.split(","))):
+            nombre, _, abrev = trozo.partition(":")
+            asignaturas.append((nombre.strip(), (abrev or nombre).strip()))
+
+        asig_db = req("POST", "/databases", json={
+            "parent": {"type": "page_id", "page_id": padre},
+            "title": [{"text": {"content": "Asignaturas"}}],
+            "properties": {"Asignatura": {"title": {}}, "Abreviatura": {"rich_text": {}}},
+        })
+        print("✅ Base de datos Asignaturas creada")
+        nuevos["ASIGNATURAS_DB_ID"] = asig_db["id"].replace("-", "")
+
+        contenido = [
+            {"object": "block", "type": "heading_2",
+             "heading_2": {"rich_text": [{"text": {"content": "📝 Tareas y notas"}}]}},
+            {"object": "block", "type": "to_do",
+             "to_do": {"rich_text": [{"text": {"content": "Nueva tarea"}}], "checked": False}},
+        ]
+        for nombre, abrev in asignaturas:
+            req("POST", "/pages", json={
+                "parent": {"database_id": asig_db["id"]},
+                "properties": {
+                    "Asignatura": {"title": [{"text": {"content": nombre}}]},
+                    "Abreviatura": {"rich_text": [{"text": {"content": abrev}}]},
+                },
+                "children": contenido,
+            })
+            print(f"   · {nombre} ({abrev})")
+    asig_id = os.environ.get("ASIGNATURAS_DB_ID") or nuevos["ASIGNATURAS_DB_ID"]
+    relacion = {"relation": {"database_id": asig_id, "single_property": {}}}
+
+    if falta("EXAMENES_DB_ID", "Exámenes y entregas"):
+        crear_examenes(req, padre, relacion, nuevos)
+    if falta("HORARIO_DB_ID", "Horario"):
+        crear_horario(req, padre, nuevos)
+
+    if falta("NOTAS_DB_ID", "Notas"):
+        notas_db = req("POST", "/databases", json={
+            "parent": {"type": "page_id", "page_id": padre},
+            "title": [{"text": {"content": "Notas"}}],
+            "properties": {
+                "Nombre": {"title": {}},
+                "Asignatura": relacion,
+                "Nota": {"number": {}},
+                "Peso": {"number": {}},  # % de la nota final: 30 = 30 %
+            },
+        })
+        print("✅ Base de datos Notas creada")
+        nuevos["NOTAS_DB_ID"] = notas_db["id"].replace("-", "")
+
+    if falta("ESTUDIO_DB_ID", "Sesiones de estudio"):
+        estudio_db = req("POST", "/databases", json={
+            "parent": {"type": "page_id", "page_id": padre},
+            "title": [{"text": {"content": "Sesiones de estudio"}}],
+            "properties": {
+                "Nombre": {"title": {}},
+                "Asignatura": relacion,
+                "Inicio": {"date": {}},
+                "Minutos": {"number": {}},  # vacío mientras la sesión está en curso
+            },
+        })
+        print("✅ Base de datos Sesiones de estudio creada")
+        nuevos["ESTUDIO_DB_ID"] = estudio_db["id"].replace("-", "")
+
+    if falta("NOTAS_RAPIDAS_PAGE_ID", "Notas rápidas"):
+        notas = req("POST", "/pages", json={
+            "parent": {"type": "page_id", "page_id": padre},
+            "icon": {"type": "emoji", "emoji": "⚡"},
+            "properties": {"title": {"title": [{"text": {"content": "Notas rápidas"}}]}},
+            "children": [{"object": "block", "type": "to_do",
+                          "to_do": {"rich_text": [], "checked": False}}],
+        })
+        print("✅ Página Notas rápidas creada")
+        nuevos["NOTAS_RAPIDAS_PAGE_ID"] = notas["id"].replace("-", "")
+
+    if nuevos:
+        guardar_env(nuevos)
+        print(f"\n🎉 Listo. He guardado en .env: {', '.join(nuevos)}. Ya puedes arrancar el bot con: python bot.py")
+    else:
+        print("\n👍 No faltaba nada: ya tenías todo creado.")
+
+
+def crear_examenes(req, padre: str, relacion: dict, nuevos: dict[str, str]):
     exam_db = req("POST", "/databases", json={
         "parent": {"type": "page_id", "page_id": padre},
         "title": [{"text": {"content": "Exámenes y entregas"}}],
@@ -106,14 +192,17 @@ def main():
                 {"name": "Entrega", "color": "orange"},
                 {"name": "Tarea", "color": "blue"},
             ]}},
-            "Asignatura": {"relation": {"database_id": asig_db["id"], "single_property": {}}},
+            "Asignatura": relacion,
             "Fecha": {"date": {}},
             "Hecho": {"checkbox": {}},
             "Notas": {"rich_text": {}},
         },
     })
     print("✅ Base de datos Exámenes y entregas creada")
+    nuevos["EXAMENES_DB_ID"] = exam_db["id"].replace("-", "")
 
+
+def crear_horario(req, padre: str, nuevos: dict[str, str]):
     horario_db = req("POST", "/databases", json={
         "parent": {"type": "page_id", "page_id": padre},
         "title": [{"text": {"content": "Horario"}}],
@@ -132,40 +221,7 @@ def main():
         },
     })
     print("✅ Base de datos Horario creada (rellénala con tus clases: día, inicio y fin tipo 9:30)")
-
-    contenido = [
-        {"object": "block", "type": "heading_2",
-         "heading_2": {"rich_text": [{"text": {"content": "📝 Tareas y notas"}}]}},
-        {"object": "block", "type": "to_do",
-         "to_do": {"rich_text": [{"text": {"content": "Nueva tarea"}}], "checked": False}},
-    ]
-    for nombre, abrev in asignaturas:
-        req("POST", "/pages", json={
-            "parent": {"database_id": asig_db["id"]},
-            "properties": {
-                "Asignatura": {"title": [{"text": {"content": nombre}}]},
-                "Abreviatura": {"rich_text": [{"text": {"content": abrev}}]},
-            },
-            "children": contenido,
-        })
-        print(f"   · {nombre} ({abrev})")
-
-    notas = req("POST", "/pages", json={
-        "parent": {"type": "page_id", "page_id": padre},
-        "icon": {"type": "emoji", "emoji": "⚡"},
-        "properties": {"title": {"title": [{"text": {"content": "Notas rápidas"}}]}},
-        "children": [{"object": "block", "type": "to_do",
-                      "to_do": {"rich_text": [], "checked": False}}],
-    })
-    print("✅ Página Notas rápidas creada")
-
-    guardar_env({
-        "EXAMENES_DB_ID": exam_db["id"].replace("-", ""),
-        "ASIGNATURAS_DB_ID": asig_db["id"].replace("-", ""),
-        "NOTAS_RAPIDAS_PAGE_ID": notas["id"].replace("-", ""),
-        "HORARIO_DB_ID": horario_db["id"].replace("-", ""),
-    })
-    print("\n🎉 Listo. He guardado los IDs en .env. Ya puedes arrancar el bot con: python bot.py")
+    nuevos["HORARIO_DB_ID"] = horario_db["id"].replace("-", "")
 
 
 if __name__ == "__main__":
