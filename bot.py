@@ -17,6 +17,7 @@ Comandos:
     /parar       termina y guarda la sesión de estudio
     /stats       horas de estudio por asignatura esta semana
     /comandos    panel de botones con el resto de comandos
+    /clear       limpia el chat (o /clear 50 para los últimos 50 mensajes)
     /ayuda      cómo escribir los mensajes
     /id          muestra el id de este chat
 """
@@ -35,6 +36,7 @@ load_dotenv()
 from telegram import (BotCommand, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup,  # noqa: E402
                       ReplyKeyboardMarkup, Update)
 from telegram.constants import ParseMode  # noqa: E402
+from telegram.error import TelegramError  # noqa: E402
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # noqa: E402
                           ContextTypes, MessageHandler, filters)
 
@@ -87,7 +89,7 @@ AYUDA = (
     "<b>Estudio</b>: <code>/estudiar BBDD</code> empieza a contar, /parar lo guarda "
     "y /stats te enseña las horas de la semana.\n\n"
     "Usa los botones de abajo o escribe: /pendientes · /horario · /avisos · /hecho · /notas · /stats · "
-    "/comandos · /ayuda"
+    "/comandos · /clear · /ayuda"
 )
 
 
@@ -650,6 +652,44 @@ async def responder_pregunta(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return True
 
 
+# ---------------- limpiar el chat ----------------
+# Un bot no puede leer el historial, pero en un chat privado los mensajes se numeran seguidos:
+# borramos por número hacia atrás. Telegram solo deja borrar los de menos de 48 h y se salta el resto.
+
+CLEAR_POR_DEFECTO = 500
+CLEAR_MAXIMO = 3000
+
+
+async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not autorizado(update):
+        return
+    cuantos = CLEAR_POR_DEFECTO
+    if ctx.args:
+        if not ctx.args[0].isdigit() or not 0 < int(ctx.args[0]) <= CLEAR_MAXIMO:
+            await update.message.reply_text(f"Usa /clear o /clear 50 (como mucho {CLEAR_MAXIMO}).")
+            return
+        cuantos = int(ctx.args[0])
+    teclado = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🧹 Sí, limpiar", callback_data=f"clear:{cuantos}"),
+        InlineKeyboardButton("Cancelar", callback_data="clear:0"),
+    ]])
+    await update.message.reply_text(
+        f"¿Borro los últimos {cuantos} mensajes del chat?\n"
+        "Solo se borra la conversación de Telegram (lo de Notion no se toca) y "
+        "Telegram no deja borrar mensajes de hace más de 48 horas.",
+        reply_markup=teclado)
+
+
+async def limpiar_chat(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, hasta_id: int, cuantos: int):
+    """Borra los mensajes con número de hasta_id - cuantos + 1 a hasta_id (los que no existan se saltan)."""
+    ids = list(range(max(1, hasta_id - cuantos + 1), hasta_id + 1))
+    for i in range(0, len(ids), 100):  # Telegram admite como mucho 100 por llamada
+        try:
+            await ctx.bot.delete_messages(chat_id, ids[i:i + 100])
+        except TelegramError as e:  # p. ej. todos los del bloque tienen más de 48 h
+            log.info("No se ha podido borrar el bloque %s-%s: %s", ids[i], ids[i:i + 100][-1], e)
+
+
 async def on_mensaje(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
         return
@@ -696,6 +736,15 @@ async def on_boton(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         return
     accion, _, page_id = q.data.partition(":")
+    if accion == "clear":  # aquí page_id es cuántos mensajes borrar (0 = cancelar)
+        await q.answer()
+        if page_id == "0":
+            await q.edit_message_text("Vale, no borro nada.")
+            return
+        await limpiar_chat(ctx, q.message.chat_id, q.message.message_id, int(page_id))
+        # Con el chat vacío se pierde el panel de botones: lo volvemos a mandar
+        await ctx.bot.send_message(q.message.chat_id, "🧹 Chat limpio.", reply_markup=PANEL_INICIO)
+        return
     n = notion(ctx)
     try:
         if accion == "done":
@@ -743,6 +792,7 @@ async def post_init(app: Application):
         BotCommand("stats", "Horas de estudio de la semana"),
         BotCommand("hecho", "Marcar cosas como hechas"),
         BotCommand("avisos", "Avisos de hoy"),
+        BotCommand("clear", "Limpiar el chat"),
     ])
     if CHAT_ID:
         h, m = (int(x) for x in HORA_RESUMEN.split(":"))
@@ -805,6 +855,7 @@ def main():
     app.add_handler(CommandHandler("parar", cmd_parar, filters=nuevos))
     app.add_handler(CommandHandler("stats", cmd_stats, filters=nuevos))
     app.add_handler(CommandHandler("comandos", cmd_comandos, filters=nuevos))
+    app.add_handler(CommandHandler("clear", cmd_clear, filters=nuevos))
     app.add_handler(CallbackQueryHandler(on_boton))
     # Antes que on_mensaje: si no, el texto de los botones se guardaría como tarea
     app.add_handler(MessageHandler(nuevos & filters.Text(list(BOTONES)), on_panel))

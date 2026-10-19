@@ -24,9 +24,11 @@ Cada persona usa **su propio bot y su propio Notion**: nadie ve las cosas de nad
 - Lo que escribas en una **segunda línea** se guarda como notas.
 - Tras guardar te responde con lo que ha entendido y un botón **↩️ Deshacer**.
 
-Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/nota`, `/notas`, `/estudiar`, `/parar`, `/stats`, `/ayuda`, `/id`.
+Comandos: `/pendientes`, `/horario`, `/avisos` (los avisos de hoy, para probar), `/hecho`, `/nota`, `/notas`, `/estudiar`, `/parar`, `/stats`, `/comandos`, `/clear`, `/ayuda`, `/id`.
 
 **Panel de botones:** bajo la caja de texto tienes *❓ Ayuda*, *📊 Notas*, *⏱ Estudiar* y *📋 Comandos* (este último abre el resto de comandos; *⬅️ Volver* regresa). Los botones de comandos que necesitan datos (Notas, Estudiar, Apuntar nota) no ejecutan nada: te preguntan lo que falta y lo ejecutan cuando respondes. Si no ves el panel, manda `/ayuda`.
+
+**Limpiar el chat:** `/clear` borra los últimos 500 mensajes de la conversación (o `/clear 50` para los últimos 50) tras pedir confirmación. Solo afecta a Telegram, no a Notion, y Telegram no deja borrar mensajes de más de 48 horas.
 
 **Horario:** `/horario` te dice las clases de hoy; también `/horario mañana` o `/horario viernes`. Lee la base de datos **Horario** de Notion: una fila por clase con *Día*, *Inicio* y *Fin* (por ejemplo `9:30` y `11:30`), *Tipo* (Teoría/Prácticas) y *Notas* opcionales (aula, profesor...).
 
