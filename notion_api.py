@@ -63,7 +63,10 @@ class Notion:
 
     async def _req(self, method: str, url: str, **kw) -> dict:
         for intento in range(3):
-            r = await self.http.request(method, url, **kw)
+            try:
+                r = await self.http.request(method, url, **kw)
+            except httpx.HTTPError as e:  # sin conexión, timeout...
+                raise NotionError(f"Notion: error de conexión ({e.__class__.__name__})") from e
             if r.status_code == 429 and intento < 2:  # límite de peticiones
                 await asyncio.sleep(float(r.headers.get("Retry-After", 1)))
                 continue
@@ -148,7 +151,11 @@ class Notion:
             if d and d.get("start"):
                 inicio = d["start"]
                 if "T" in inicio:
-                    dt = datetime.fromisoformat(inicio).astimezone(TZ)
+                    # Python < 3.11 no entiende la "Z" final
+                    dt = datetime.fromisoformat(inicio.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:  # sin desfase: la zona viene aparte o es la nuestra
+                        dt = dt.replace(tzinfo=ZoneInfo(d["time_zone"]) if d.get("time_zone") else TZ)
+                    dt = dt.astimezone(TZ)
                     fecha, hora = dt.date(), dt.strftime("%H:%M")
                 else:
                     fecha = date.fromisoformat(inicio[:10])

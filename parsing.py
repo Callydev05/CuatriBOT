@@ -43,7 +43,8 @@ STOPWORDS_BORDE = {"de", "del", "para", "el", "la", "los", "las", "a", "al", "en
 
 def norm(s: str) -> str:
     """Minúsculas y sin tildes, conservando la longitud (para alinear posiciones)."""
-    return "".join(unicodedata.normalize("NFD", ch)[0] for ch in s.lower())
+    # lower() carácter a carácter: en bloque puede alargar la cadena (p. ej. "İ" → "i̇")
+    return "".join(unicodedata.normalize("NFD", ch.lower())[0] for ch in s)
 
 
 @dataclass

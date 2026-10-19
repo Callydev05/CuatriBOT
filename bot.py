@@ -10,6 +10,7 @@ Comandos:
     /pendientes  resumen ahora mismo
     /avisos      los avisos de hoy ahora mismo (para probar)
     /hecho       marcar cosas como hechas
+    /horario     clases de hoy (o /horario mañana, /horario viernes)
     /ayuda       cómo escribir los mensajes
     /id          muestra el id de este chat
 """
@@ -21,15 +22,18 @@ import os
 from datetime import date, datetime, time, timedelta
 
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+
+# Antes de importar notion_api: ahí se lee ZONA_HORARIA al importar
+load_dotenv()
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram.constants import ParseMode  # noqa: E402
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # noqa: E402
                           ContextTypes, MessageHandler, filters)
 
-from notion_api import TZ, Notion, NotionError, Pendiente
-from parsing import analizar
+from notion_api import TZ, Notion, NotionError, Pendiente  # noqa: E402
+from parsing import analizar  # noqa: E402
 
-load_dotenv()
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("cuatribot")
@@ -146,7 +150,7 @@ def texto_resumen(pend: list[Pendiente], abrevs: dict[str, str], todos_asig: dic
 def trocear(texto: str, limite: int = 4000) -> list[str]:
     trozos, actual = [], ""
     for linea in texto.split("\n"):
-        if len(actual) + len(linea) + 1 > limite:
+        if actual and len(actual) + len(linea) + 1 > limite:
             trozos.append(actual)
             actual = ""
         actual += linea + "\n"
@@ -453,15 +457,17 @@ def main():
     iniciar_web_salud()
     app = (Application.builder().token(TELEGRAM_TOKEN)
            .post_init(post_init).post_shutdown(post_shutdown).build())
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("id", cmd_id))
-    app.add_handler(CommandHandler(["ayuda", "help"], cmd_ayuda))
-    app.add_handler(CommandHandler("pendientes", cmd_pendientes))
-    app.add_handler(CommandHandler("avisos", cmd_avisos))
-    app.add_handler(CommandHandler("hecho", cmd_hecho))
-    app.add_handler(CommandHandler("horario", cmd_horario))
+    # Solo mensajes nuevos: al editar un mensaje update.message es None (y se guardaría dos veces)
+    nuevos = filters.UpdateType.MESSAGE
+    app.add_handler(CommandHandler("start", cmd_start, filters=nuevos))
+    app.add_handler(CommandHandler("id", cmd_id, filters=nuevos))
+    app.add_handler(CommandHandler(["ayuda", "help"], cmd_ayuda, filters=nuevos))
+    app.add_handler(CommandHandler("pendientes", cmd_pendientes, filters=nuevos))
+    app.add_handler(CommandHandler("avisos", cmd_avisos, filters=nuevos))
+    app.add_handler(CommandHandler("hecho", cmd_hecho, filters=nuevos))
+    app.add_handler(CommandHandler("horario", cmd_horario, filters=nuevos))
     app.add_handler(CallbackQueryHandler(on_boton))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_mensaje))
+    app.add_handler(MessageHandler(nuevos & filters.TEXT & ~filters.COMMAND, on_mensaje))
     app.add_error_handler(on_error)
     log.info("Bot en marcha")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
