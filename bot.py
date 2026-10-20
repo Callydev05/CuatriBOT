@@ -43,7 +43,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,  # 
 from calculos import (Nota, fmt_duracion, fmt_num, minutos_por_asignatura,  # noqa: E402
                       parsear_nota, resumen_notas)
 from notion_api import TZ, Notion, NotionError, Pendiente  # noqa: E402
-from parsing import Asignatura, analizar, buscar_asignatura, norm  # noqa: E402
+from parsing import Asignatura, analizar, buscar_asignatura  # noqa: E402
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -145,11 +145,13 @@ def texto_resumen(pend: list[Pendiente], abrevs: dict[str, str], todos_asig: dic
         if items:
             partes.append(f"\n<b>{titulo}</b>\n" + "\n".join(items))
 
-    seccion("⚠️ Atrasado", [f"• {etiqueta(p, abrevs)} — {fecha_corta(p.fecha)}" for p in atrasado])
+    seccion("⚠️ Atrasado", [f"• {etiqueta(p, abrevs)} — {fecha_corta(p.fecha)} "
+                           f"<b>({cuanto_falta((p.fecha - ref).days)})</b>" for p in atrasado])
     seccion(f"🔥 Próximos {dias_aviso} días",
             [f"• <b>{cuanto_falta((p.fecha - ref).days)}</b> · {etiqueta(p, abrevs)}"
              f"{' · ' + p.hora if p.hora else ''}" for p in pronto])
-    seccion("🗓 Más adelante", [f"• {fecha_corta(p.fecha)} · {etiqueta(p, abrevs)}" for p in luego])
+    seccion("🗓 Más adelante", [f"• <b>{cuanto_falta((p.fecha - ref).days)}</b> · {fecha_corta(p.fecha)} · "
+                               f"{etiqueta(p, abrevs)}" for p in luego])
     seccion("📌 Sin fecha", [f"• {etiqueta(p, abrevs)}" for p in sin_fecha])
 
     if todos_asig:
@@ -435,8 +437,8 @@ async def cmd_notas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
         return
     if not NOTAS_DB_ID:
-        await update.message.reply_text("No tengo configuradas las notas. Ejecuta otra vez setup_notion.py "
-                                        "(o añade NOTAS_DB_ID en el .env) y reinicia el bot.")
+        await update.effective_message.reply_text("No tengo configuradas las notas. Ejecuta otra vez "
+                                                  "setup_notion.py (o añade NOTAS_DB_ID en el .env) y reinicia el bot.")
         return
     n = notion(ctx)
     try:
@@ -444,16 +446,16 @@ async def cmd_notas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if ctx.args:
             asig = buscar_asignatura(" ".join(ctx.args), asigs)
             if not asig:
-                await update.message.reply_text(f"No conozco la asignatura «{' '.join(ctx.args)}».")
+                await update.effective_message.reply_text(f"No conozco la asignatura «{' '.join(ctx.args)}».")
                 return
             texto = texto_notas(asig, await n.notas(asig.id))
         else:
             texto = texto_todas_notas(asigs, await n.notas())
     except NotionError as e:
         log.error("Error leyendo las notas: %s", e)
-        await update.message.reply_text("⚠️ No he podido leer las notas de Notion.")
+        await update.effective_message.reply_text("⚠️ No he podido leer las notas de Notion.")
         return
-    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(texto, parse_mode=ParseMode.HTML)
 
 
 # ---------------- horas de estudio ----------------
@@ -485,40 +487,39 @@ def texto_stats(minutos: dict[str, int], asigs: list[Asignatura], desde: date) -
 async def comprobar_estudio(update: Update) -> bool:
     if ESTUDIO_DB_ID:
         return True
-    await update.message.reply_text("No tengo configurado el registro de estudio. Ejecuta otra vez "
-                                    "setup_notion.py (o añade ESTUDIO_DB_ID en el .env) y reinicia el bot.")
+    await update.effective_message.reply_text("No tengo configurado el registro de estudio. Ejecuta otra vez "
+                                              "setup_notion.py (o añade ESTUDIO_DB_ID en el .env) y reinicia el bot.")
     return False
 
 
 async def cmd_estudiar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update) or not await comprobar_estudio(update):
         return
+    responder = update.effective_message.reply_text  # también vale desde los botones de asignatura
     if not ctx.args:
-        await update.message.reply_text("¿Qué vas a estudiar? Ejemplo: <code>/estudiar BBDD</code>",
-                                        parse_mode=ParseMode.HTML)
+        await responder("¿Qué vas a estudiar? Ejemplo: <code>/estudiar BBDD</code>", parse_mode=ParseMode.HTML)
         return
     n = notion(ctx)
     try:
         asigs = await n.asignaturas()
         asig = buscar_asignatura(" ".join(ctx.args), asigs)
         if not asig:
-            await update.message.reply_text(f"No conozco la asignatura «{' '.join(ctx.args)}».")
+            await responder(f"No conozco la asignatura «{' '.join(ctx.args)}».")
             return
         actual = await n.estudio_en_curso()
         if actual:
             abrevs = {a.id: a.abrev for a in asigs}
             de_que = ", ".join(abrevs.get(a, "?") for a in actual.asignaturas) or "algo"
-            await update.message.reply_text(f"Ya estás estudiando {de_que} desde las "
-                                            f"{actual.inicio:%H:%M}. Usa /parar antes de empezar otra.")
+            await responder(f"Ya estás estudiando {de_que} desde las "
+                            f"{actual.inicio:%H:%M}. Usa /parar antes de empezar otra.")
             return
         await n.empezar_estudio(asig)
     except NotionError as e:
         log.error("Error empezando a estudiar: %s", e)
-        await update.message.reply_text("⚠️ No he podido guardar la sesión en Notion.")
+        await responder("⚠️ No he podido guardar la sesión en Notion.")
         return
-    await update.message.reply_text(f"⏱ Empiezo a contar <b>{html.escape(asig.nombre)}</b> "
-                                    f"({datetime.now(TZ):%H:%M}). Cuando acabes: /parar",
-                                    parse_mode=ParseMode.HTML)
+    await responder(f"⏱ Empiezo a contar <b>{html.escape(asig.nombre)}</b> "
+                    f"({datetime.now(TZ):%H:%M}). Cuando acabes: /parar", parse_mode=ParseMode.HTML)
 
 
 async def cmd_parar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -575,12 +576,10 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # Teclado fijo bajo la caja de texto. Cada botón manda su texto como un mensaje normal: on_panel lo
 # reconoce y ejecuta el comando o, si al comando le faltan datos, se los pide (ForceReply).
 # 🗓 Horario abre un teclado con los días de la semana; cada día equivale a /horario <día>.
+# 📊 Notas y ⏱ Estudiar sacan un botón por asignatura; cada uno equivale a /notas <asig> o /estudiar <asig>.
 
 # Comandos que necesitan datos: (pregunta, pista gris en la caja de texto, comando)
 PREGUNTAS = {
-    "notas": ("📊 ¿De qué asignatura? Escribe su abreviatura (por ejemplo IGV) o «todas».",
-              "IGV, BBDD o todas", cmd_notas),
-    "estudiar": ("⏱ ¿Qué vas a estudiar? Escribe la asignatura.", "BBDD", cmd_estudiar),
     "nota": ("📝 Escribe asignatura, nombre, nota y peso.\nEjemplo: IGV práctica1 8.5 30%",
              "IGV práctica1 8.5 30%", cmd_nota),
 }
@@ -627,6 +626,33 @@ async def preguntar(update: Update, ctx: ContextTypes.DEFAULT_TYPE, clave: str):
     ctx.user_data["pendiente"] = {"comando": clave, "msg_id": msg.message_id}
 
 
+async def elegir_asignatura(update: Update, ctx: ContextTypes.DEFAULT_TYPE, clave: str):
+    """Un botón por asignatura; al pulsarlo, on_boton ejecuta /notas o /estudiar con ella."""
+    if clave == "notas" and not NOTAS_DB_ID:
+        ctx.args = []
+        await cmd_notas(update, ctx)  # explica qué falta configurar
+        return
+    if clave == "estudiar" and not await comprobar_estudio(update):
+        return
+    try:
+        asigs = await notion(ctx).asignaturas()
+    except NotionError as e:
+        log.error("Error leyendo las asignaturas: %s", e)
+        await update.message.reply_text("⚠️ No he podido leer las asignaturas de Notion.")
+        return
+    if not asigs:
+        await update.message.reply_text("No tienes asignaturas en Notion.")
+        return
+    botones = [InlineKeyboardButton(a.abrev, callback_data=f"{clave}:{a.id}") for a in asigs]
+    filas = [botones[i:i + 3] for i in range(0, len(botones), 3)]
+    if clave == "notas":
+        filas.append([InlineKeyboardButton("📊 Todas", callback_data="notas:todas")])
+        pregunta = "📊 ¿De qué asignatura quieres ver las notas?"
+    else:
+        pregunta = "⏱ ¿Qué vas a estudiar?"
+    await update.message.reply_text(pregunta, reply_markup=InlineKeyboardMarkup(filas))
+
+
 async def on_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not autorizado(update):
         return
@@ -641,6 +667,8 @@ async def on_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif accion == "dia":
         ctx.args = [update.message.text]  # como /horario <día>
         await cmd_horario(update, ctx)
+    elif accion in ("notas", "estudiar"):
+        await elegir_asignatura(update, ctx, accion)
     elif isinstance(accion, str):
         await preguntar(update, ctx, accion)
     else:
@@ -655,10 +683,8 @@ async def responder_pregunta(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     if not (pendiente and respuesta_a and respuesta_a.message_id == pendiente["msg_id"]):
         return False
     del ctx.user_data["pendiente"]
-    clave = pendiente["comando"]
-    texto = update.message.text.strip()
-    ctx.args = [] if clave == "notas" and norm(texto) == "todas" else texto.split()
-    await PREGUNTAS[clave][2](update, ctx)
+    ctx.args = update.message.text.split()
+    await PREGUNTAS[pendiente["comando"]][2](update, ctx)
     return True
 
 
@@ -771,6 +797,17 @@ async def on_boton(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 await q.edit_message_text(q.message.text_html + "\n\n✅ <b>Hecho</b>",
                                           parse_mode=ParseMode.HTML)
+        elif accion in ("notas", "estudiar"):  # aquí page_id es el id de la asignatura (o "todas")
+            await q.answer()
+            asig = next((a for a in await n.asignaturas() if a.id == page_id), None)
+            if page_id != "todas" and not asig:
+                await q.edit_message_text("Esa asignatura ya no existe en Notion.")
+                return
+            # Quitamos los botones y dejamos a la vista lo elegido
+            elegida = html.escape(asig.nombre if asig else "Todas")
+            await q.edit_message_text(f"{q.message.text_html}\n👉 <b>{elegida}</b>", parse_mode=ParseMode.HTML)
+            ctx.args = [asig.abrev] if asig else []  # como /notas IGV, /notas o /estudiar IGV
+            await (cmd_notas if accion == "notas" else cmd_estudiar)(update, ctx)
         elif accion == "undo":
             await n.borrar(page_id)
             await q.answer("Borrado")

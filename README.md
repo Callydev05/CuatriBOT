@@ -92,13 +92,19 @@ Bajo la caja de texto tienes siempre un panel. Si no lo ves, manda `/ayuda`.
 
 **🗓 Horario** abre un teclado con los días de la semana: pulsa uno para ver sus clases, o 📋 Comandos para volver.
 
-Los botones que **necesitan datos** (📊 Notas, ⏱ Estudiar, 📝 Apuntar nota) no ejecutan nada al pulsarlos: el bot te pregunta lo que falta, con una pista en la caja de texto, y lo ejecuta cuando respondes.
+**📊 Notas** y **⏱ Estudiar** te enseñan un botón por cada asignatura de Notion: pulsa la que quieras (en Notas también hay **📊 Todas**).
 
 ```
 Tú:   [📊 Notas]
-Bot:  📊 ¿De qué asignatura? Escribe su abreviatura (por ejemplo IGV) o «todas».
-Tú:   IGV            ← equivale a /notas IGV
+Bot:  📊 ¿De qué asignatura quieres ver las notas?
+      [ IGV ] [ BBDD ] [ SO ]
+      [     📊 Todas      ]
+Tú:   (pulsas IGV)   ← equivale a /notas IGV
 ```
+
+**📝 Apuntar nota** necesita más datos: el bot te pregunta lo que falta, con una pista en la caja de texto, y lo ejecuta cuando respondes.
+
+En el resumen de **📋 Pendientes** cada examen, entrega y tarea con fecha muestra cuántos días quedan (o cuántos lleva atrasado).
 
 ---
 
