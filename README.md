@@ -90,6 +90,8 @@ Bajo la caja de texto tienes siempre un panel. Si no lo ves, manda `/ayuda`.
                                    └────────────────┴──────────────┘
 ```
 
+**🗓 Horario** abre un teclado con los días de la semana: pulsa uno para ver sus clases, o 📋 Comandos para volver.
+
 Los botones que **necesitan datos** (📊 Notas, ⏱ Estudiar, 📝 Apuntar nota) no ejecutan nada al pulsarlos: el bot te pregunta lo que falta, con una pista en la caja de texto, y lo ejecuta cuando respondes.
 
 ```

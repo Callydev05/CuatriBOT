@@ -574,6 +574,7 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ---------------- panel de botones ----------------
 # Teclado fijo bajo la caja de texto. Cada botón manda su texto como un mensaje normal: on_panel lo
 # reconoce y ejecuta el comando o, si al comando le faltan datos, se los pide (ForceReply).
+# 🗓 Horario abre un teclado con los días de la semana; cada día equivale a /horario <día>.
 
 # Comandos que necesitan datos: (pregunta, pista gris en la caja de texto, comando)
 PREGUNTAS = {
@@ -591,13 +592,14 @@ BOTONES = {
     "⏱ Estudiar": "estudiar",
     "📋 Comandos": "comandos",
     "📋 Pendientes": cmd_pendientes,
-    "🗓 Horario": cmd_horario,
+    "🗓 Horario": "horario",
     "🔔 Avisos": cmd_avisos,
     "✅ Hecho": cmd_hecho,
     "📝 Apuntar nota": "nota",
     "⏹ Parar": cmd_parar,
     "📈 Stats": cmd_stats,
     "⬅️ Volver": "volver",
+    **{dia: "dia" for dia in DIAS_NOTION[:5]},  # teclado de 🗓 Horario
 }
 
 PANEL_INICIO = ReplyKeyboardMarkup([["❓ Ayuda", "📊 Notas"], ["⏱ Estudiar", "📋 Comandos"]],
@@ -605,6 +607,9 @@ PANEL_INICIO = ReplyKeyboardMarkup([["❓ Ayuda", "📊 Notas"], ["⏱ Estudiar"
 PANEL_COMANDOS = ReplyKeyboardMarkup(
     [["📋 Pendientes", "🗓 Horario"], ["🔔 Avisos", "✅ Hecho"],
      ["📝 Apuntar nota", "⏹ Parar"], ["📈 Stats", "⬅️ Volver"]],
+    resize_keyboard=True, is_persistent=True)
+PANEL_HORARIO = ReplyKeyboardMarkup(
+    [["Lunes", "Martes"], ["Miércoles", "Jueves"], ["Viernes", "📋 Comandos"]],
     resize_keyboard=True, is_persistent=True)
 
 
@@ -631,6 +636,11 @@ async def on_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_comandos(update, ctx)
     elif accion == "volver":
         await update.message.reply_text("Panel principal.", reply_markup=PANEL_INICIO)
+    elif accion == "horario":
+        await update.message.reply_text("🗓 ¿Qué día quieres ver?", reply_markup=PANEL_HORARIO)
+    elif accion == "dia":
+        ctx.args = [update.message.text]  # como /horario <día>
+        await cmd_horario(update, ctx)
     elif isinstance(accion, str):
         await preguntar(update, ctx, accion)
     else:
